@@ -564,3 +564,9 @@ PIP_PACKAGE_INDEX_OPTIONS = os.getenv("PIP_PACKAGE_INDEX_OPTIONS", "").split()
 ####################################
 
 EXTERNAL_PWA_MANIFEST_URL = os.environ.get("EXTERNAL_PWA_MANIFEST_URL")
+
+# Amazon Bedrock
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+BEDROCK_CHAT_MODEL = os.environ.get("BEDROCK_CHAT_MODEL", "")
+BEDROCK_EMBED_MODEL = os.environ.get("BEDROCK_EMBED_MODEL", "")
+

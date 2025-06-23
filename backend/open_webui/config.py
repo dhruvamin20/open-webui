@@ -2194,6 +2194,7 @@ RAG_RERANKING_MODEL = PersistentConfig(
     "rag.reranking_model",
     os.environ.get("RAG_RERANKING_MODEL", ""),
 )
+RAG_RERANK_MODEL = os.environ.get("RAG_RERANK_MODEL", "claude-rerank")
 if RAG_RERANKING_MODEL.value != "":
     log.info(f"Reranking model set: {RAG_RERANKING_MODEL.value}")
 

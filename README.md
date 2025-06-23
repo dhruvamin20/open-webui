@@ -238,6 +238,27 @@ If you are running Open WebUI in an offline environment, you can set the `HF_HUB
 export HF_HUB_OFFLINE=1
 ```
 
+### Amazon Bedrock Integration
+
+Open WebUI can interact with Amazon Bedrock for chat completions and
+embeddings. Configure the following environment variables in your `.env`
+file:
+
+```bash
+BEDROCK_REGION=us-east-1
+BEDROCK_CHAT_MODEL=<model-id>
+BEDROCK_EMBED_MODEL=<model-id>
+
+# Optional reranker used by `scripts/rerank.py`
+RAG_RERANK_MODEL=claude-rerank
+
+# Default vector database
+VECTOR_DB=pgvector
+```
+
+The provided `scripts/rerank.py` exposes a small FastAPI service that
+leverages Bedrock to rerank search results.
+
 ## What's Next? 🌟
 
 Discover upcoming features on our roadmap in the [Open WebUI Documentation](https://docs.openwebui.com/roadmap/).

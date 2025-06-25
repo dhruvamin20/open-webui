@@ -20,6 +20,12 @@ from open_webui.models.files import Files
 
 from open_webui.retrieval.vector.main import GetResult
 
+# Import advanced retrieval
+from open_webui.retrieval.advanced_retrieval import (
+    get_advanced_retrieval,
+    FileSource,
+    ProcessingMode,
+)
 
 from open_webui.env import (
     SRC_LOG_LEVELS,
@@ -460,11 +466,115 @@ def get_sources_from_files(
 
     extracted_collections = []
     relevant_contexts = []
+    
+    # Get advanced retrieval instance
+    advanced_retrieval = get_advanced_retrieval(
+        chunk_size=request.app.state.config.CHUNK_SIZE,
+        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+        text_splitter_type=request.app.state.config.TEXT_SPLITTER,
+        enable_query_expansion=request.app.state.config.get("ENABLE_QUERY_EXPANSION", True),
+        enable_document_reranking=request.app.state.config.get("ENABLE_DOCUMENT_RERANKING", True),
+    )
 
     for file in files:
+        # Determine file source based on metadata
+        file_source = FileSource.DIRECT_UPLOAD
+        if file.get("type") == "collection":
+            file_source = FileSource.KNOWLEDGE_BASE
+        elif file.get("context") == "full" or file.get("from_chat_upload"):
+            file_source = FileSource.CHAT_UPLOAD
+        
+        # Add source metadata
+        file_metadata = file.get("metadata", {})
+        file_metadata["source"] = file_source
 
         context = None
-        if file.get("docs"):
+        
+        # Check if we should use advanced retrieval
+        use_advanced_retrieval = request.app.state.config.get("USE_ADVANCED_RETRIEVAL", True)
+        
+        if use_advanced_retrieval and not file.get("docs"):
+            # Use advanced retrieval system
+            processing_mode = advanced_retrieval.determine_processing_mode(file_metadata)
+            
+            if processing_mode == ProcessingMode.FULL_CONTEXT:
+                # Handle full context mode
+                if file.get("context") == "full":
+                    context = {
+                        "documents": [[file.get("file").get("data", {}).get("content")]],
+                        "metadatas": [[{"file_id": file.get("id"), "name": file.get("name")}]],
+                    }
+                elif file.get("id"):
+                    file_object = Files.get_file_by_id(file.get("id"))
+                    if file_object:
+                        context = {
+                            "documents": [[file_object.data.get("content", "")]],
+                            "metadatas": [
+                                [
+                                    {
+                                        "file_id": file.get("id"),
+                                        "name": file_object.filename,
+                                        "source": file_object.filename,
+                                        "processing_mode": ProcessingMode.FULL_CONTEXT.value,
+                                    }
+                                ]
+                            ],
+                        }
+            else:
+                # For chunked processing, use existing logic with enhancements
+                collection_names = []
+                if file.get("type") == "collection":
+                    if file.get("legacy"):
+                        collection_names = file.get("collection_names", [])
+                    else:
+                        collection_names.append(file["id"])
+                elif file.get("collection_name"):
+                    collection_names.append(file["collection_name"])
+                elif file.get("id"):
+                    if file.get("legacy"):
+                        collection_names.append(f"{file['id']}")
+                    else:
+                        collection_names.append(f"file-{file['id']}")
+
+                collection_names = set(collection_names).difference(extracted_collections)
+                if not collection_names:
+                    log.debug(f"skipping {file} as it has already been extracted")
+                    continue
+
+                # Use advanced retrieval for search
+                advanced_results = advanced_retrieval.retrieve_with_context_trigger(
+                    query=queries[0] if queries else "",
+                    files=[{
+                        "collection_name": cn,
+                        "metadata": file_metadata,
+                    } for cn in collection_names],
+                    embedding_function=embedding_function,
+                    vector_db_client=VECTOR_DB_CLIENT,
+                    k=k,
+                    reranking_function=reranking_function,
+                )
+                
+                if advanced_results:
+                    # Convert advanced results to expected format
+                    documents = []
+                    metadatas = []
+                    distances = []
+                    
+                    for result in advanced_results:
+                        documents.append(result["document"])
+                        metadatas.append(result["metadata"])
+                        distances.append(result["metadata"].get("score", 0.0))
+                    
+                    context = {
+                        "documents": [documents],
+                        "metadatas": [metadatas],
+                        "distances": [distances],
+                    }
+                
+                extracted_collections.extend(collection_names)
+        
+        # Fall back to original logic if advanced retrieval is disabled or for special cases
+        elif file.get("docs"):
             # BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
             context = {
                 "documents": [[doc.get("content") for doc in file.get("docs")]],

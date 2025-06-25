@@ -1439,7 +1439,7 @@ FOLLOW_UP_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
 DEFAULT_FOLLOW_UP_GENERATION_PROMPT_TEMPLATE = """### Task:
 Suggest 3-5 relevant follow-up questions or prompts that the user might naturally ask next in this conversation as a **user**, based on the chat history, to help continue or deepen the discussion.
 ### Guidelines:
-- Write all follow-up questions from the user’s point of view, directed to the assistant.
+- Write all follow-up questions from the user's point of view, directed to the assistant.
 - Make questions concise, clear, and directly related to the discussed topic(s).
 - Only suggest follow-ups that make sense given the chat content and do not repeat what was already covered.
 - If the conversation is very short or not specific, suggest more general (but relevant) follow-ups the user might ask.
@@ -2085,6 +2085,51 @@ RAG_FULL_CONTEXT = PersistentConfig(
     "RAG_FULL_CONTEXT",
     "rag.full_context",
     os.getenv("RAG_FULL_CONTEXT", "False").lower() == "true",
+)
+
+# Advanced Retrieval Configuration
+USE_ADVANCED_RETRIEVAL = PersistentConfig(
+    "USE_ADVANCED_RETRIEVAL",
+    "rag.use_advanced_retrieval",
+    os.getenv("USE_ADVANCED_RETRIEVAL", "True").lower() == "true",
+)
+
+ENABLE_QUERY_EXPANSION = PersistentConfig(
+    "ENABLE_QUERY_EXPANSION",
+    "rag.enable_query_expansion",
+    os.getenv("ENABLE_QUERY_EXPANSION", "True").lower() == "true",
+)
+
+ENABLE_DOCUMENT_RERANKING = PersistentConfig(
+    "ENABLE_DOCUMENT_RERANKING",
+    "rag.enable_document_reranking",
+    os.getenv("ENABLE_DOCUMENT_RERANKING", "True").lower() == "true",
+)
+
+ENABLE_SEMANTIC_CHUNKING = PersistentConfig(
+    "ENABLE_SEMANTIC_CHUNKING",
+    "rag.enable_semantic_chunking",
+    os.getenv("ENABLE_SEMANTIC_CHUNKING", "False").lower() == "true",
+)
+
+# Context-aware processing modes
+CHAT_UPLOAD_PROCESSING_MODE = PersistentConfig(
+    "CHAT_UPLOAD_PROCESSING_MODE",
+    "rag.chat_upload_processing_mode",
+    os.getenv("CHAT_UPLOAD_PROCESSING_MODE", "full_context"),
+)
+
+KNOWLEDGE_BASE_PROCESSING_MODE = PersistentConfig(
+    "KNOWLEDGE_BASE_PROCESSING_MODE",
+    "rag.knowledge_base_processing_mode",
+    os.getenv("KNOWLEDGE_BASE_PROCESSING_MODE", "chunked_vectorized"),
+)
+
+# Text splitting configuration
+RAG_TEXT_SPLITTER = PersistentConfig(
+    "RAG_TEXT_SPLITTER",
+    "rag.text_splitter",
+    os.environ.get("RAG_TEXT_SPLITTER", ""),
 )
 
 RAG_FILE_MAX_COUNT = PersistentConfig(

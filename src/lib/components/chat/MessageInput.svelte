@@ -233,10 +233,21 @@
 		}
 	};
 
-	const uploadFileHandler = async (file, fullContext: boolean = false) => {
-		if ($_user?.role !== 'admin' && !($_user?.permissions?.chat?.file_upload ?? true)) {
-			toast.error($i18n.t('You do not have permission to upload files.'));
-			return null;
+	const uploadFileHandler = async (file) => {
+		console.log(file);
+
+		// Check if file is an audio file and transcribe/convert it to text file
+		if (['audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/x-m4a'].includes(file['type'])) {
+			const transcribeRes = await transcribeAudio(localStorage.token, file).catch((error) => {
+				toast.error(error);
+				return null;
+			});
+
+			if (transcribeRes) {
+				console.log(transcribeRes);
+				const blob = new Blob([transcribeRes.text], { type: 'text/plain' });
+				file = new File([blob], `${file.name}.txt`, { type: 'text/plain' });
+			}
 		}
 
 		const tempItemId = uuidv4();
@@ -250,8 +261,7 @@
 			status: 'uploading',
 			size: file.size,
 			error: '',
-			itemId: tempItemId,
-			...(fullContext ? { context: 'full' } : {})
+			itemId: tempItemId
 		};
 
 		if (fileItem.size == 0) {
@@ -259,49 +269,45 @@
 			return null;
 		}
 
+		if (
+			($config?.file?.max_size ?? null) !== null &&
+			file.size > ($config?.file?.max_size ?? 0) * 1024 * 1024
+		) {
+			console.log('File exceeds max size limit:', {
+				fileSize: file.size,
+				maxSize: ($config?.file?.max_size ?? 0) * 1024 * 1024
+			});
+			toast.error(
+				$i18n.t(`File size should not exceed {{maxSize}} MB.`, {
+					maxSize: $config?.file?.max_size
+				})
+			);
+			return;
+		}
+
 		files = [...files, fileItem];
 
-		try {
-			// If the file is an audio file, provide the language for STT.
-			let metadata = null;
-			if (
-				(file.type.startsWith('audio/') || file.type.startsWith('video/')) &&
-				$settings?.audio?.stt?.language
-			) {
-				metadata = {
-					language: $settings?.audio?.stt?.language
-				};
-			}
-
-			// During the file upload, file content is automatically extracted.
-			const uploadedFile = await uploadFile(localStorage.token, file, metadata);
-
-			if (uploadedFile) {
-				console.log('File upload completed:', {
-					id: uploadedFile.id,
-					name: fileItem.name,
-					collection: uploadedFile?.meta?.collection_name
-				});
-
-				if (uploadedFile.error) {
-					console.warn('File upload warning:', uploadedFile.error);
-					toast.warning(uploadedFile.error);
-				}
-
-				fileItem.status = 'uploaded';
-				fileItem.file = uploadedFile;
-				fileItem.id = uploadedFile.id;
-				fileItem.collection_name =
-					uploadedFile?.meta?.collection_name || uploadedFile?.collection_name;
-				fileItem.url = `${WEBUI_API_BASE_URL}/files/${uploadedFile.id}`;
-
-				files = files;
-			} else {
-				files = files.filter((item) => item?.itemId !== tempItemId);
-			}
-		} catch (e) {
+		// Upload file with metadata indicating it's from chat
+		const uploadedFile = await uploadFile(localStorage.token, file, {
+			from_chat_upload: true,
+			timestamp: Date.now()
+		}).catch((e) => {
 			toast.error(`${e}`);
-			files = files.filter((item) => item?.itemId !== tempItemId);
+			return null;
+		});
+
+		if (uploadedFile) {
+			fileItem.status = 'uploaded';
+			fileItem.file = uploadedFile;
+			fileItem.id = uploadedFile.id;
+			fileItem.url = `${WEBUI_API_BASE_URL}/files/${uploadedFile.id}/preview`;
+			fileItem.collection_name = uploadedFile.collection_name;
+
+			// Remove the loading item and add the uploaded file
+			files = files.map((item) => (item.itemId === tempItemId ? fileItem : item));
+		} else {
+			files = files.filter((item) => item.itemId !== tempItemId);
+			toast.error($i18n.t('Failed to upload file.'));
 		}
 	};
 

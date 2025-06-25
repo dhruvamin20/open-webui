@@ -28,6 +28,7 @@
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import General from './Documents/General.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -306,6 +307,8 @@
 					<div class=" mb-2.5 text-base font-medium">{$i18n.t('General')}</div>
 
 					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+					
+					<General bind:RAGConfig updateHandler={submitHandler} />
 
 					<div class="mb-2.5 flex flex-col w-full justify-between">
 						<div class="flex w-full justify-between mb-1">

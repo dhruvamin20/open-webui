@@ -1283,6 +1283,9 @@ def process_file(
         if collection_name is None:
             collection_name = f"file-{file.id}"
 
+        # Check if advanced retrieval is enabled
+        use_advanced_retrieval = request.app.state.config.get("USE_ADVANCED_RETRIEVAL", True)
+        
         if form_data.content:
             # Update the content in the file
             # Usage: /files/{file_id}/data/content/update, /files/ (audio file upload pipeline)
@@ -1360,74 +1363,91 @@ def process_file(
                     EXTERNAL_DOCUMENT_LOADER_API_KEY=request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY,
                     TIKA_SERVER_URL=request.app.state.config.TIKA_SERVER_URL,
                     DOCLING_SERVER_URL=request.app.state.config.DOCLING_SERVER_URL,
-                    DOCLING_PARAMS={
-                        "ocr_engine": request.app.state.config.DOCLING_OCR_ENGINE,
-                        "ocr_lang": request.app.state.config.DOCLING_OCR_LANG,
-                        "do_picture_description": request.app.state.config.DOCLING_DO_PICTURE_DESCRIPTION,
-                        "picture_description_mode": request.app.state.config.DOCLING_PICTURE_DESCRIPTION_MODE,
-                        "picture_description_local": request.app.state.config.DOCLING_PICTURE_DESCRIPTION_LOCAL,
-                        "picture_description_api": request.app.state.config.DOCLING_PICTURE_DESCRIPTION_API,
-                    },
-                    PDF_EXTRACT_IMAGES=request.app.state.config.PDF_EXTRACT_IMAGES,
+                    DOCLING_OCR_ENGINE=request.app.state.config.DOCLING_OCR_ENGINE,
+                    DOCLING_OCR_LANG=request.app.state.config.DOCLING_OCR_LANG,
+                    DOCLING_DO_PICTURE_DESCRIPTION=request.app.state.config.DOCLING_DO_PICTURE_DESCRIPTION,
+                    DOCLING_PICTURE_DESCRIPTION_MODE=request.app.state.config.DOCLING_PICTURE_DESCRIPTION_MODE,
+                    DOCLING_PICTURE_DESCRIPTION_LOCAL=request.app.state.config.DOCLING_PICTURE_DESCRIPTION_LOCAL,
+                    DOCLING_PICTURE_DESCRIPTION_API=request.app.state.config.DOCLING_PICTURE_DESCRIPTION_API,
+                    DOCLING_PARAMS=request.app.state.config.get("DOCLING_PARAMS", {}),
                     DOCUMENT_INTELLIGENCE_ENDPOINT=request.app.state.config.DOCUMENT_INTELLIGENCE_ENDPOINT,
                     DOCUMENT_INTELLIGENCE_KEY=request.app.state.config.DOCUMENT_INTELLIGENCE_KEY,
                     MISTRAL_OCR_API_KEY=request.app.state.config.MISTRAL_OCR_API_KEY,
+                    PDF_EXTRACT_IMAGES=request.app.state.config.PDF_EXTRACT_IMAGES,
                 )
-                docs = loader.load(
-                    file.filename, file.meta.get("content_type"), file_path
+                docs = loader.load(file.filename, file.content_type, file_path)
+
+                text_content = " ".join([doc.page_content for doc in docs])
+                log.debug(f"text_content: {text_content}")
+
+                Files.update_file_data_by_id(
+                    file.id,
+                    {"content": text_content},
                 )
 
-                docs = [
-                    Document(
-                        page_content=doc.page_content,
-                        metadata={
-                            **doc.metadata,
-                            "name": file.filename,
-                            "created_by": file.user_id,
-                            "file_id": file.id,
-                            "source": file.filename,
-                        },
-                    )
-                    for doc in docs
-                ]
             else:
-                docs = [
-                    Document(
-                        page_content=file.data.get("content", ""),
-                        metadata={
-                            **file.meta,
-                            "name": file.filename,
-                            "created_by": file.user_id,
-                            "file_id": file.id,
-                            "source": file.filename,
-                        },
-                    )
-                ]
-            text_content = " ".join([doc.page_content for doc in docs])
-
-        log.debug(f"text_content: {text_content}")
-        Files.update_file_data_by_id(
-            file.id,
-            {"content": text_content},
-        )
+                raise ValueError(ERROR_MESSAGES.FILE_NOT_FOUND)
 
         hash = calculate_sha256_string(text_content)
         Files.update_file_hash_by_id(file.id, hash)
 
         if not request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
             try:
-                result = save_docs_to_vector_db(
-                    request,
-                    docs=docs,
-                    collection_name=collection_name,
-                    metadata={
-                        "file_id": file.id,
-                        "name": file.filename,
-                        "hash": hash,
-                    },
-                    add=(True if form_data.collection_name else False),
-                    user=user,
-                )
+                # Use advanced retrieval if enabled
+                if use_advanced_retrieval:
+                    from open_webui.retrieval.advanced_retrieval import (
+                        get_advanced_retrieval,
+                        FileSource,
+                    )
+                    
+                    advanced_retrieval = get_advanced_retrieval(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        text_splitter_type=request.app.state.config.TEXT_SPLITTER,
+                        enable_semantic_chunking=request.app.state.config.ENABLE_SEMANTIC_CHUNKING,
+                        enable_query_expansion=request.app.state.config.ENABLE_QUERY_EXPANSION,
+                        enable_document_reranking=request.app.state.config.ENABLE_DOCUMENT_RERANKING,
+                    )
+                    
+                    # Determine file source
+                    file_metadata = file.meta.copy()
+                    if hasattr(form_data, 'metadata') and form_data.metadata:
+                        file_metadata.update(form_data.metadata)
+                    
+                    # Process documents with advanced retrieval
+                    processed_docs = advanced_retrieval.process_documents(
+                        docs, 
+                        file_metadata
+                    )
+                    
+                    # Save processed documents
+                    result = save_docs_to_vector_db(
+                        request,
+                        docs=processed_docs,
+                        collection_name=collection_name,
+                        metadata={
+                            "file_id": file.id,
+                            "name": file.filename,
+                            "hash": hash,
+                        },
+                        add=(True if form_data.collection_name else False),
+                        split=False,  # Already processed by advanced retrieval
+                        user=user,
+                    )
+                else:
+                    # Use standard processing
+                    result = save_docs_to_vector_db(
+                        request,
+                        docs=docs,
+                        collection_name=collection_name,
+                        metadata={
+                            "file_id": file.id,
+                            "name": file.filename,
+                            "hash": hash,
+                        },
+                        add=(True if form_data.collection_name else False),
+                        user=user,
+                    )
 
                 if result:
                     Files.update_file_metadata_by_id(

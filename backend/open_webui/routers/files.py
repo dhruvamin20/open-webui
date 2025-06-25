@@ -93,58 +93,61 @@ def upload_file(
 ):
     log.info(f"file.content_type: {file.content_type}")
 
+    # Convert string metadata to dict if needed
     if isinstance(metadata, str):
         try:
             metadata = json.loads(metadata)
         except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=ERROR_MESSAGES.DEFAULT("Invalid metadata format"),
-            )
-    file_metadata = metadata if metadata else {}
+            metadata = {}
+    if metadata is None:
+        metadata = {}
 
     try:
-        unsanitized_filename = file.filename
-        filename = os.path.basename(unsanitized_filename)
+        filename = file.filename
+        file_path = f"/tmp/{filename}"
+        contents = file.file.read()
 
-        file_extension = os.path.splitext(filename)[1]
-        # Remove the leading dot from the file extension
-        file_extension = file_extension[1:] if file_extension else ""
+        with open(file_path, "wb") as f:
+            f.write(contents)
 
-        if (not internal) and request.app.state.config.ALLOWED_FILE_EXTENSIONS:
-            request.app.state.config.ALLOWED_FILE_EXTENSIONS = [
-                ext for ext in request.app.state.config.ALLOWED_FILE_EXTENSIONS if ext
-            ]
-
-            if file_extension not in request.app.state.config.ALLOWED_FILE_EXTENSIONS:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.DEFAULT(
-                        f"File type {file_extension} is not allowed"
-                    ),
-                )
-
-        # replace filename with uuid
-        id = str(uuid.uuid4())
-        name = filename
-        filename = f"{id}_{filename}"
-        tags = {
-            "OpenWebUI-User-Email": user.email,
-            "OpenWebUI-User-Id": user.id,
-            "OpenWebUI-User-Name": user.name,
-            "OpenWebUI-File-Id": id,
+        file_metadata = {
+            "content_type": file.content_type,
+            "size": len(contents),
+            "path": file_path,
+            **metadata,
         }
-        contents, file_path = Storage.upload_file(file.file, filename, tags)
+        
+        # Mark file source for advanced retrieval
+        if metadata.get("from_chat_upload"):
+            file_metadata["source"] = "chat_upload"
+        elif metadata.get("from_knowledge_base"):
+            file_metadata["source"] = "knowledge_base"
+        else:
+            file_metadata["source"] = "direct_upload"
+
+        files = Files.get_files_by_user_id(user.id, False)
+        if (
+            request.app.state.config.FILE_MAX_COUNT != None
+            and len(files) >= request.app.state.config.FILE_MAX_COUNT
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.FILE_LIMIT_REACHED(
+                    request.app.state.config.FILE_MAX_COUNT
+                ),
+            )
+
+        file_id = str(uuid.uuid4())
 
         file_item = Files.insert_new_file(
             user.id,
             FileForm(
                 **{
-                    "id": id,
-                    "filename": name,
+                    "id": file_id,
+                    "filename": filename,
                     "path": file_path,
                     "meta": {
-                        "name": name,
+                        "name": filename,
                         "content_type": file.content_type,
                         "size": len(contents),
                         "data": file_metadata,
@@ -152,63 +155,50 @@ def upload_file(
                 }
             ),
         )
+
         if process:
             try:
-                if file.content_type:
-                    stt_supported_content_types = (
-                        request.app.state.config.STT_SUPPORTED_CONTENT_TYPES
-                        or [
-                            "audio/*",
-                            "video/webm",
-                        ]
+                # Handle different file types
+                if file.content_type and file.content_type.startswith(("audio/", "video/")):
+                    # Process audio/video files
+                    result = transcribe(request, file_path, file_metadata)
+                    process_file(
+                        request,
+                        ProcessFileForm(file_id=file_id, content=result.get("text", "")),
+                        user=user,
                     )
-
-                    if any(
-                        fnmatch(file.content_type, content_type)
-                        for content_type in stt_supported_content_types
-                    ):
-                        file_path = Storage.get_file(file_path)
-                        result = transcribe(request, file_path, file_metadata)
-
-                        process_file(
-                            request,
-                            ProcessFileForm(file_id=id, content=result.get("text", "")),
-                            user=user,
-                        )
-                    elif (not file.content_type.startswith(("image/", "video/"))) or (
-                        request.app.state.config.CONTENT_EXTRACTION_ENGINE == "external"
-                    ):
-                        process_file(request, ProcessFileForm(file_id=id), user=user)
+                elif not file.content_type.startswith(("image/", "video/")) or (
+                    request.app.state.config.CONTENT_EXTRACTION_ENGINE == "external"
+                ):
+                    # Process documents with context-aware processing
+                    process_file(
+                        request, 
+                        ProcessFileForm(
+                            file_id=file_id,
+                            metadata=file_metadata  # Pass metadata for processing mode determination
+                        ), 
+                        user=user
+                    )
                 else:
-                    log.info(
-                        f"File type {file.content_type} is not provided, but trying to process anyway"
-                    )
-                    process_file(request, ProcessFileForm(file_id=id), user=user)
+                    # For images without external processing, just save metadata
+                    Files.update_file_data_by_id(file_id, {"content": "", **file_metadata})
 
-                file_item = Files.get_file_by_id(id=id)
+                # Update file item with processed status
+                file_item = Files.get_file_by_id(file_id)
+
             except Exception as e:
-                log.exception(e)
-                log.error(f"Error processing file: {file_item.id}")
-                file_item = FileModelResponse(
-                    **{
-                        **file_item.model_dump(),
-                        "error": str(e.detail) if hasattr(e, "detail") else str(e),
-                    }
+                log.exception(f"Error processing file: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ERROR_MESSAGES.DEFAULT(e),
                 )
 
-        if file_item:
-            return file_item
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=ERROR_MESSAGES.DEFAULT("Error uploading file"),
-            )
-
+        return file_item
     except Exception as e:
-        log.exception(e)
+        log.exception(f"Error uploading file: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=ERROR_MESSAGES.DEFAULT("Error uploading file"),
+            detail=ERROR_MESSAGES.DEFAULT(e),
         )
 
 
@@ -562,7 +552,7 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
                     detail=ERROR_MESSAGES.NOT_FOUND,
                 )
         else:
-            # File path doesn’t exist, return the content as .txt if possible
+            # File path doesn't exist, return the content as .txt if possible
             file_content = file.content.get("content", "")
             file_name = file.filename
 

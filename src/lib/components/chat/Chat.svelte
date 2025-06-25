@@ -434,80 +434,70 @@
 
 	let pageSubscribe = null;
 	onMount(async () => {
-		loading = true;
-		console.log('mounted');
+		// Ensure we clean up any stale state
+		if (chatIdUnsubscriber) {
+			chatIdUnsubscriber();
+		}
+		
+		// Subscribe to chat ID changes
+		chatIdUnsubscriber = chatId.subscribe(async (value) => {
+			if (value && value !== '' && value !== 'local') {
+				await loadChat();
+			}
+		});
+
+		if (chatIdProp) {
+			await loadChat();
+		} else {
+			await initNewChat();
+		}
+
+		await tick();
+
+		// Event listeners
 		window.addEventListener('message', onMessageHandler);
-		$socket?.on('chat-events', chatEventHandler);
 
-		pageSubscribe = page.subscribe(async (p) => {
-			if (p.url.pathname === '/') {
-				await tick();
-				initNewChat();
-			}
-		});
+		// Shortcut keys
+		document.addEventListener('keydown', onKeyDown);
 
-		if (localStorage.getItem(`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`)) {
-			prompt = '';
-			files = [];
-			selectedToolIds = [];
-			selectedFilterIds = [];
-			webSearchEnabled = false;
-			imageGenerationEnabled = false;
-			codeInterpreterEnabled = false;
+		// Prevent default paste behavior
+		window.addEventListener('paste', onPaste);
 
-			try {
-				const input = JSON.parse(
-					localStorage.getItem(`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`)
-				);
-
-				if (!$temporaryChatEnabled) {
-					prompt = input.prompt;
-					files = input.files;
-					selectedToolIds = input.selectedToolIds;
-					selectedFilterIds = input.selectedFilterIds;
-					webSearchEnabled = input.webSearchEnabled;
-					imageGenerationEnabled = input.imageGenerationEnabled;
-					codeInterpreterEnabled = input.codeInterpreterEnabled;
-				}
-			} catch (e) {}
-		}
-
-		if (!chatIdProp) {
-			loading = false;
+		eventTarget.addEventListener('chat:start', async (e) => {
 			await tick();
-		}
-
-		showControls.subscribe(async (value) => {
-			if (controlPane && !$mobile) {
-				try {
-					if (value) {
-						controlPaneComponent.openPane();
-					} else {
-						controlPane.collapse();
-					}
-				} catch (e) {
-					// ignore
-				}
-			}
-
-			if (!value) {
-				showCallOverlay.set(false);
-				showOverview.set(false);
-				showArtifacts.set(false);
+			if (e.detail.id === history?.currentId) {
+				await showMessage({ id: e.detail.id });
 			}
 		});
 
-		const chatInput = document.getElementById('chat-input');
-		chatInput?.focus();
+		eventTarget.addEventListener('chat:finish', async (e) => {
+			await tick();
+			if (e.detail.id === history?.currentId) {
+				await showMessage({ id: e.detail.id });
+			}
+		});
 
-		chats.subscribe(() => {});
+		eventTarget.addEventListener('chat', async (e) => {
+			await tick();
+		});
+
+		loading = false;
 	});
 
 	onDestroy(() => {
-		pageSubscribe();
-		chatIdUnsubscriber?.();
+		if (chatIdUnsubscriber) {
+			chatIdUnsubscriber();
+		}
+		
+		// Clean up event listeners
 		window.removeEventListener('message', onMessageHandler);
-		$socket?.off('chat-events', chatEventHandler);
+		document.removeEventListener('keydown', onKeyDown);
+		window.removeEventListener('paste', onPaste);
+		
+		// Clear any pending tasks
+		if (taskIds) {
+			taskIds = null;
+		}
 	});
 
 	// File upload functions
@@ -894,6 +884,19 @@
 						? chatContent.history
 						: convertMessagesToHistory(chatContent.messages);
 
+				// Ensure currentId is valid
+				if (!history.currentId || !history.messages[history.currentId]) {
+					// Find the last message in the conversation
+					let lastMessageId = null;
+					for (const [id, message] of Object.entries(history.messages)) {
+						if (message.childrenIds.length === 0) {
+							lastMessageId = id;
+							break;
+						}
+					}
+					history.currentId = lastMessageId;
+				}
+
 				chatTitle.set(chatContent.title);
 
 				const userSettings = await getUserSettings(localStorage.token);
@@ -924,6 +927,22 @@
 
 				if (taskRes) {
 					taskIds = taskRes.task_ids;
+				}
+
+				// Reset prompt and files when switching chats
+				prompt = '';
+				files = [];
+				
+				// Load saved input if exists
+				const savedInput = localStorage.getItem(`chat-input-${$chatId}`);
+				if (savedInput) {
+					try {
+						const parsedInput = JSON.parse(savedInput);
+						prompt = parsedInput.prompt || '';
+						files = parsedInput.files || [];
+					} catch (e) {
+						console.error('Error parsing saved input:', e);
+					}
 				}
 
 				await tick();
@@ -1359,6 +1378,13 @@
 			return;
 		}
 
+		// Check if we have a valid chat context
+		if (!$chatId || $chatId === '') {
+			console.error('No valid chat ID');
+			toast.error($i18n.t('Please select or create a chat'));
+			return;
+		}
+
 		if (messages.length != 0 && messages.at(-1).done != true) {
 			// Response not done
 			return;
@@ -1402,6 +1428,14 @@
 		}
 
 		const _files = JSON.parse(JSON.stringify(files));
+		// Mark files uploaded from chat
+		_files.forEach(file => {
+			if (!file.metadata) {
+				file.metadata = {};
+			}
+			file.metadata.from_chat_upload = true;
+		});
+		
 		chatFiles.push(..._files.filter((item) => ['doc', 'file', 'collection'].includes(item.type)));
 		chatFiles = chatFiles.filter(
 			// Remove duplicates

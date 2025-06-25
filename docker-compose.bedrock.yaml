@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # Bedrock Access Gateway - OpenAI-compatible API for AWS Bedrock
+  bedrock-gateway:
+    image: bedrock-gateway
+    container_name: bedrock-gateway
+    ports:
+      - "8000:80"
+    environment:
+      # AWS Credentials - Replace these with your actual credentials
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}  # Optional, only if using temporary credentials
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      # API Key for authentication (default is "bedrock")
+      - DEFAULT_API_KEYS=bedrock
+      # Enable debug logging
+      - DEBUG=true
+    networks:
+      - open-webui-network
+    restart: unless-stopped
+
+  # Open WebUI
+  open-webui:
+    image: open-webui
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      # OpenAI API configuration pointing to Bedrock Gateway
+      - OPENAI_API_BASE_URL=http://bedrock-gateway/api/v1
+      - OPENAI_API_KEY=bedrock  # This matches DEFAULT_API_KEYS in bedrock-gateway
+      # Optional: Enable OpenAI API for additional models
+      - ENABLE_OPENAI_API=true
+      # Database URL (using SQLite by default)
+      - DATABASE_URL=sqlite:////app/backend/data/webui.db
+      # WebUI Secret Key for session management
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-}
+      # Optional: Disable authentication for testing
+      # - WEBUI_AUTH=false
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - open-webui-network
+    depends_on:
+      - bedrock-gateway
+    restart: unless-stopped
+
+networks:
+  open-webui-network:
+    driver: bridge
+
+volumes:
+  open-webui-data: 

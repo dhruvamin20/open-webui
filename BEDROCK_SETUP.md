@@ -101,6 +101,21 @@ AccessDeniedException: You don't have access to the model with the specified mod
 
 Solution: Enable the model in AWS Bedrock Model Access page.
 
+### Ollama Connection Error
+If you see this error:
+```
+connection error: Cannot connect to host host.docker.internal:11434 ssl:default
+```
+
+This happens when Open WebUI tries to connect to Ollama. Solutions:
+
+1. **If using only Bedrock**: The updated `docker-compose.bedrock.yaml` disables Ollama
+2. **If you have Ollama installed locally**: Configure it to listen on all interfaces:
+   ```bash
+   OLLAMA_HOST=0.0.0.0 ollama serve
+   ```
+3. **If you want both**: Use `docker-compose.bedrock-ollama.yaml` which includes containerized Ollama
+
 ### Connection Failed
 - Ensure both containers are on the same network
 - Check AWS credentials are correct

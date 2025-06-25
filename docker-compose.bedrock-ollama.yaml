@@ -1,10 +1,21 @@
 version: '3.8'
 
 services:
+  # Ollama service (containerized)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - open-webui-network
+    restart: unless-stopped
+
   # Bedrock Access Gateway - OpenAI-compatible API for AWS Bedrock
   bedrock-gateway:
-    image: bedrock-gateway:latest
-    pull_policy: never  # Use local image only
+    image: bedrock-gateway
     container_name: bedrock-gateway
     ports:
       - "8000:80"
@@ -12,7 +23,8 @@ services:
       # AWS Credentials - Replace these with your actual credentials
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=us-east-1
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}  # Optional, only if using temporary credentials
+      - AWS_REGION=${AWS_REGION:-us-east-1}
       # API Key for authentication (default is "bedrock")
       - DEFAULT_API_KEYS=bedrock
       # Enable debug logging
@@ -23,35 +35,29 @@ services:
 
   # Open WebUI
   open-webui:
-    image: open-webui:latest
-    pull_policy: never  # Use local image only
+    image: open-webui
     container_name: open-webui
     ports:
       - "3000:8080"
     environment:
+      # Ollama configuration (using containerized Ollama)
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ENABLE_OLLAMA_API=true
       # OpenAI API configuration pointing to Bedrock Gateway
       - OPENAI_API_BASE_URL=http://bedrock-gateway/api/v1
       - OPENAI_API_KEY=bedrock  # This matches DEFAULT_API_KEYS in bedrock-gateway
-      # Optional: Enable OpenAI API for additional models
       - ENABLE_OPENAI_API=true
-      # Disable Ollama to prevent connection errors
-      - ENABLE_OLLAMA_API=false
-      - OLLAMA_BASE_URL=""
       # Database URL (using SQLite by default)
       - DATABASE_URL=sqlite:////app/backend/data/webui.db
       # WebUI Secret Key for session management
-      - WEBUI_SECRET_KEY=generate_a_random_string_here
-      # Optional: Disable authentication for testing
-      - WEBUI_AUTH=false
-      # Fix for infinite spinner issue
-      - WEBUI_SESSION_COOKIE_SAME_SITE=lax
-      - WEBUI_SESSION_COOKIE_SECURE=false
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-}
     volumes:
       - open-webui-data:/app/backend/data
     networks:
       - open-webui-network
     depends_on:
       - bedrock-gateway
+      - ollama
     restart: unless-stopped
 
 networks:
@@ -59,4 +65,5 @@ networks:
     driver: bridge
 
 volumes:
-  open-webui-data: 
+  open-webui-data:
+  ollama-data: 
